@@ -33,20 +33,21 @@ def normalize_genre(genre: str) -> str:
 
 def normalize_song(raw: Song) -> Song:
     """Return a normalized song dict with expected keys."""
-    title = normalize_title(str(raw.get("title", "")))
-    artist = normalize_artist(str(raw.get("artist", "")))
-    genre = normalize_genre(str(raw.get("genre", "")))
+    title = normalize_title(str(raw.get("title") or ""))
+    artist = normalize_artist(str(raw.get("artist") or ""))
+    genre = normalize_genre(str(raw.get("genre") or ""))
     energy = raw.get("energy", 0)
 
     if isinstance(energy, str):
         try:
-            energy = int(energy)
+            energy = int(float(energy.strip()))
         except ValueError:
             energy = 0
 
-    tags = raw.get("tags", [])
+    tags = raw.get("tags") or []
     if isinstance(tags, str):
         tags = [tags]
+    tags = [str(t).strip().lower() for t in tags if str(t).strip()]
 
     return {
         "title": title,
@@ -65,21 +66,18 @@ def classify_song(song: Song, profile: Dict[str, object]) -> str:
 
     hype_min_energy = profile.get("hype_min_energy", 7)
     chill_max_energy = profile.get("chill_max_energy", 3)
-    favorite_genre = profile.get("favorite_genre", "")
+    favorite_genre = normalize_genre(str(profile.get("favorite_genre") or ""))
 
     hype_keywords = ["rock", "punk", "party"]
     chill_keywords = ["lofi", "ambient", "sleep"]
 
     is_hype_keyword = any(k in genre for k in hype_keywords)
-    is_chill_keyword = any(k in genre or k in title for k in chill_keywords)
+    is_chill_keyword = any(k in title for k in chill_keywords)
 
-    # Energy decides first; genre/keywords only settle mid-energy songs.
-    if energy >= hype_min_energy:
+    if genre == favorite_genre or energy >= hype_min_energy or is_hype_keyword:
         return "Hype"
     if energy <= chill_max_energy or is_chill_keyword:
         return "Chill"
-    if genre == favorite_genre or is_hype_keyword:
-        return "Hype"
     return "Mixed"
 
 
@@ -109,15 +107,32 @@ def merge_playlists(a: PlaylistMap, b: PlaylistMap) -> PlaylistMap:
     return merged
 
 
+def unique_songs(songs: List[Song]) -> List[Song]:
+    """Drop duplicate songs, matching on case-insensitive title and artist."""
+    seen = set()
+    result: List[Song] = []
+    for song in songs:
+        key = (
+            normalize_title(str(song.get("title", ""))).lower(),
+            normalize_artist(str(song.get("artist", ""))),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(song)
+    return result
+
+
 def compute_playlist_stats(playlists: PlaylistMap) -> Dict[str, object]:
     """Compute statistics across all playlists."""
     all_songs: List[Song] = []
     for songs in playlists.values():
         all_songs.extend(songs)
+    all_songs = unique_songs(all_songs)
 
-    hype = playlists.get("Hype", [])
-    chill = playlists.get("Chill", [])
-    mixed = playlists.get("Mixed", [])
+    hype = unique_songs(playlists.get("Hype", []))
+    chill = unique_songs(playlists.get("Chill", []))
+    mixed = unique_songs(playlists.get("Mixed", []))
 
     total = len(all_songs)
     hype_ratio = len(hype) / total if total > 0 else 0.0
@@ -182,6 +197,7 @@ def lucky_pick(
     mode: str = "any",
 ) -> Optional[Song]:
     """Pick a song from the playlists according to mode."""
+    mode = str(mode).strip().lower()
     if mode == "hype":
         songs = playlists.get("Hype", [])
     elif mode == "chill":
